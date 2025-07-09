@@ -3,6 +3,14 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    
+    <!-- Performance optimization permissions -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    
+    <!-- CPU and performance features -->
+    <uses-feature android:name="android.hardware.type.embedded" android:required="false" />
+    <uses-feature android:name="android.software.high_performance" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -16,7 +24,10 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.WhisperCppDemo">
+            android:theme="@style/Theme.WhisperCppDemo"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:screenOrientation="portrait"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

@@ -6,8 +6,28 @@ import java.io.FileReader
 
 object WhisperCpuConfig {
     val preferredThreadCount: Int
-        // Always use at least 2 threads:
-        get() = CpuInfo.getHighPerfCpuCount().coerceAtLeast(2)
+        // Aggressive optimization: Use more CPU cores for faster processing
+        get() = getOptimalThreadCount()
+    
+    private fun getOptimalThreadCount(): Int {
+        val totalCores = Runtime.getRuntime().availableProcessors()
+        val highPerfCores = CpuInfo.getHighPerfCpuCount()
+        
+        // Use aggressive threading for better performance
+        // Priority: High-perf cores > Total cores with limits
+        return when {
+            // For flagship devices (8+ cores): Use 75% of total cores
+            totalCores >= 8 -> (totalCores * 0.75).toInt().coerceAtLeast(4)
+            
+            // For mid-range devices (4-7 cores): Use high-perf cores + 2
+            totalCores >= 4 -> (highPerfCores + 2).coerceAtMost(totalCores)
+            
+            // For low-end devices: Use all available cores
+            else -> totalCores.coerceAtLeast(2)
+        }.also { threadCount ->
+            Log.d("WhisperCpuConfig", "Optimal threads: $threadCount (Total cores: $totalCores, High-perf: $highPerfCores)")
+        }
+    }
 }
 
 private class CpuInfo(private val lines: List<String>) {
