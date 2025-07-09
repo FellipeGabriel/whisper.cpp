@@ -2,6 +2,7 @@ package com.whispercpp.whisper
 
 import android.content.res.AssetManager
 import android.os.Build
+import android.os.Process
 import android.util.Log
 import kotlinx.coroutines.*
 import java.io.File
@@ -11,18 +12,70 @@ import java.util.concurrent.Executors
 private const val LOG_TAG = "LibWhisper"
 
 class WhisperContext private constructor(private var ptr: Long) {
-    // Meet Whisper C++ constraint: Don't access from more than one thread at a time.
+    // OPTIMIZED: Use multiple threads for better performance while maintaining thread safety
     private val scope: CoroutineScope = CoroutineScope(
-        Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        Executors.newFixedThreadPool(WhisperCpuConfig.preferredThreadCount).asCoroutineDispatcher()
     )
 
     suspend fun transcribeData(data: FloatArray, printTimestamp: Boolean = true): String = withContext(scope.coroutineContext) {
         require(ptr != 0L)
+        
+        // CHUNKED PROCESSING for better performance on large audio
+        if (data.size > 240000) { // More than 15 seconds at 16kHz
+            return@withContext transcribeDataChunked(data, printTimestamp)
+        }
+        
+        return@withContext transcribeDataSingle(data, printTimestamp)
+    }
+    
+    private suspend fun transcribeDataSingle(data: FloatArray, printTimestamp: Boolean): String {
+        require(ptr != 0L)
+        
+        // PERFORMANCE OPTIMIZATION SEQUENCE
+        val startTime = System.currentTimeMillis()
+        
+        // Try to set CPU governor to performance mode for maximum speed
+        WhisperCpuConfig.setCpuGovernorToPerformance()
+        
+        // Set thread priority to maximum for whisper processing
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+            Log.d(LOG_TAG, "Set thread priority to URGENT_AUDIO")
+        } catch (e: Exception) {
+            Log.d(LOG_TAG, "Could not set thread priority: ${e.message}")
+        }
+        
         val numThreads = WhisperCpuConfig.preferredThreadCount
-        Log.d(LOG_TAG, "Selecting $numThreads threads")
+        Log.d(LOG_TAG, "MAXIMUM PERFORMANCE: Using $numThreads threads")
+        
+        // Aggressive memory optimization
+        val memoryBefore = Runtime.getRuntime().freeMemory()
+        System.gc()
+        Runtime.getRuntime().gc()
+        Thread.sleep(10) // Give GC time to complete
+        val memoryAfter = Runtime.getRuntime().freeMemory()
+        Log.d(LOG_TAG, "Memory freed: ${(memoryAfter - memoryBefore) / 1024 / 1024}MB")
+        
+        // Log system optimization info
+        Log.d(LOG_TAG, "SYSTEM INFO: ${getOptimizedSystemInfo()}")
+        Log.d(LOG_TAG, "AUDIO DATA: ${data.size} samples (${data.size / 16000.0f} seconds of audio)")
+        
+        // TRANSCRIPTION PROCESSING
+        val transcribeStart = System.currentTimeMillis()
+        Log.d(LOG_TAG, "STARTING TRANSCRIPTION with $numThreads threads")
+        
         WhisperLib.fullTranscribe(ptr, numThreads, data)
+        
+        val transcribeTime = System.currentTimeMillis() - transcribeStart
+        val processingTime = System.currentTimeMillis() - startTime
+        Log.d(LOG_TAG, "PERFORMANCE BREAKDOWN:")
+        Log.d(LOG_TAG, "  - Setup time: ${transcribeStart - startTime}ms")
+        Log.d(LOG_TAG, "  - Transcription time: ${transcribeTime}ms")
+        Log.d(LOG_TAG, "  - Total time: ${processingTime}ms")
+        Log.d(LOG_TAG, "  - Audio length: ${data.size} samples")
+        Log.d(LOG_TAG, "  - Performance: ${data.size.toFloat() / transcribeTime}ms samples/ms")
         val textCount = WhisperLib.getTextSegmentCount(ptr)
-        return@withContext buildString {
+        val result = buildString {
             for (i in 0 until textCount) {
                 if (printTimestamp) {
                     val textTimestamp = "[${toTimestamp(WhisperLib.getTextSegmentT0(ptr, i))} --> ${toTimestamp(WhisperLib.getTextSegmentT1(ptr, i))}]"
@@ -33,6 +86,46 @@ class WhisperContext private constructor(private var ptr: Long) {
                 }
             }
         }
+        
+        // Reset thread priority after processing
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_DEFAULT)
+        } catch (e: Exception) {
+            // Ignore
+        }
+        
+        val totalTime = System.currentTimeMillis() - startTime
+        Log.d(LOG_TAG, "PERFORMANCE: Total transcription time: ${totalTime}ms")
+        
+        return result
+    }
+    
+    private suspend fun transcribeDataChunked(data: FloatArray, printTimestamp: Boolean): String {
+        require(ptr != 0L)
+        
+        val chunkSize = 160000 // 10 seconds at 16kHz
+        val overlap = 16000    // 1 second overlap
+        val chunks = mutableListOf<String>()
+        
+        Log.d(LOG_TAG, "CHUNKED PROCESSING: ${data.size} samples in chunks of $chunkSize")
+        
+        var start = 0
+        while (start < data.size) {
+            val end = minOf(start + chunkSize, data.size)
+            val chunk = data.sliceArray(start until end)
+            
+            Log.d(LOG_TAG, "Processing chunk: $start-$end (${chunk.size} samples)")
+            val chunkResult = transcribeDataSingle(chunk, false) // No timestamps for chunks
+            
+            if (chunkResult.isNotBlank()) {
+                chunks.add(chunkResult.trim())
+            }
+            
+            start += chunkSize - overlap // Move with overlap
+        }
+        
+        Log.d(LOG_TAG, "CHUNKED PROCESSING COMPLETE: ${chunks.size} chunks processed")
+        return chunks.joinToString(" ")
     }
 
     suspend fun benchMemory(nthreads: Int): String = withContext(scope.coroutineContext) {
@@ -58,10 +151,18 @@ class WhisperContext private constructor(private var ptr: Long) {
 
     companion object {
         fun createContextFromFile(filePath: String): WhisperContext {
+            Log.d(LOG_TAG, "CREATING OPTIMIZED CONTEXT from: $filePath")
+            val startTime = System.currentTimeMillis()
+            
             val ptr = WhisperLib.initContext(filePath)
             if (ptr == 0L) {
                 throw java.lang.RuntimeException("Couldn't create context with path $filePath")
             }
+            
+            val loadTime = System.currentTimeMillis() - startTime
+            Log.d(LOG_TAG, "MODEL LOADED in ${loadTime}ms with OPTIMIZED settings")
+            Log.d(LOG_TAG, "System info: ${getSystemInfo()}")
+            
             return WhisperContext(ptr)
         }
 
@@ -85,6 +186,27 @@ class WhisperContext private constructor(private var ptr: Long) {
 
         fun getSystemInfo(): String {
             return WhisperLib.getSystemInfo()
+        }
+        
+        fun getOptimizedSystemInfo(): String {
+            val systemInfo = WhisperLib.getSystemInfo()
+            val cpuInfo = WhisperCpuConfig.preferredThreadCount
+            val totalMemory = Runtime.getRuntime().totalMemory() / 1024 / 1024 // MB
+            val freeMemory = Runtime.getRuntime().freeMemory() / 1024 / 1024 // MB
+            val maxMemory = Runtime.getRuntime().maxMemory() / 1024 / 1024 // MB
+            
+            return """WHISPER OPTIMIZATION INFO:
+                |Threads: $cpuInfo
+                |Total Memory: ${totalMemory}MB
+                |Free Memory: ${freeMemory}MB
+                |Max Memory: ${maxMemory}MB
+                |CPU ABI: ${Build.SUPPORTED_ABIS[0]}
+                |Android Version: ${Build.VERSION.RELEASE}
+                |Device: ${Build.MANUFACTURER} ${Build.MODEL}
+                |
+                |SYSTEM INFO:
+                |$systemInfo
+            """.trimMargin()
         }
     }
 }

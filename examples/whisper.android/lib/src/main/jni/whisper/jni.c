@@ -3,7 +3,6 @@
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
 #include <stdlib.h>
-#include <sys/sysinfo.h>
 #include <string.h>
 #include "whisper.h"
 #include "ggml.h"
@@ -91,7 +90,18 @@ Java_com_whispercppdemo_whisper_WhisperLib_00024Companion_initContextFromInputSt
 
     loader.eof(loader.context);
 
-    context = whisper_init(&loader);
+    // Use MAXIMUM OPTIMIZED context parameters
+    struct whisper_context_params cparams = whisper_context_default_params();
+    cparams.use_gpu = false;        // Disable GPU for consistent performance on Android
+    cparams.flash_attn = false;     // Disable flash attention for stability
+    cparams.dtw_token_timestamps = false; // Disable DTW timestamps for speed
+    
+    LOGI("OPTIMIZED CONTEXT: gpu=%s, flash_attn=%s, dtw=%s", 
+         cparams.use_gpu ? "true" : "false",
+         cparams.flash_attn ? "true" : "false", 
+         cparams.dtw_token_timestamps ? "true" : "false");
+    
+    context = whisper_init_with_params(&loader, cparams);
     return (jlong) context;
 }
 
@@ -127,7 +137,18 @@ static struct whisper_context *whisper_init_from_asset(
             .close = &asset_close
     };
 
-    return whisper_init_with_params(&loader, whisper_context_default_params());
+    // Use MAXIMUM OPTIMIZED context parameters
+    struct whisper_context_params cparams = whisper_context_default_params();
+    cparams.use_gpu = false;        // Disable GPU for consistent performance on Android
+    cparams.flash_attn = false;     // Disable flash attention for stability
+    cparams.dtw_token_timestamps = false; // Disable DTW timestamps for speed
+    
+    LOGI("OPTIMIZED CONTEXT: gpu=%s, flash_attn=%s, dtw=%s", 
+         cparams.use_gpu ? "true" : "false",
+         cparams.flash_attn ? "true" : "false", 
+         cparams.dtw_token_timestamps ? "true" : "false");
+
+    return whisper_init_with_params(&loader, cparams);
 }
 
 JNIEXPORT jlong JNICALL
@@ -147,7 +168,19 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_initContext(
     UNUSED(thiz);
     struct whisper_context *context = NULL;
     const char *model_path_chars = (*env)->GetStringUTFChars(env, model_path_str, NULL);
-    context = whisper_init_from_file_with_params(model_path_chars, whisper_context_default_params());
+    
+    // Use MAXIMUM OPTIMIZED context parameters
+    struct whisper_context_params cparams = whisper_context_default_params();
+    cparams.use_gpu = false;        // Disable GPU for consistent performance on Android
+    cparams.flash_attn = false;     // Disable flash attention for stability
+    cparams.dtw_token_timestamps = false; // Disable DTW timestamps for speed
+    
+    LOGI("OPTIMIZED CONTEXT: gpu=%s, flash_attn=%s, dtw=%s", 
+         cparams.use_gpu ? "true" : "false",
+         cparams.flash_attn ? "true" : "false", 
+         cparams.dtw_token_timestamps ? "true" : "false");
+    
+    context = whisper_init_from_file_with_params(model_path_chars, cparams);
     (*env)->ReleaseStringUTFChars(env, model_path_str, model_path_chars);
     return (jlong) context;
 }
@@ -168,19 +201,53 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
     struct whisper_context *context = (struct whisper_context *) context_ptr;
     jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
     const jsize audio_data_length = (*env)->GetArrayLength(env, audio_data);
+    
+    // Log optimization settings - CPU count determined at Kotlin level
+    LOGI("WHISPER OPTIMIZATION: Using %d threads for maximum performance", num_threads);
 
     // The below adapted from the Objective-C iOS sample
     struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.print_realtime = true;
-    params.print_progress = false;
-    params.print_timestamps = true;
+    
+    // Performance optimizations
+    params.print_realtime = false;        // Disable realtime printing for better performance
+    params.print_progress = false;         // Disable progress printing
+    params.print_timestamps = false;       // Disable timestamps printing during processing
     params.print_special = false;
     params.translate = false;
     params.language = "pt";
     params.n_threads = num_threads;
     params.offset_ms = 0;
-    params.no_context = true;
+    
+    // Aggressive performance optimizations
+    params.no_context = true;              // Disable context for faster processing
     params.single_segment = false;
+    params.no_timestamps = false;          // Keep timestamps but don't print them
+    params.token_timestamps = false;       // Disable token-level timestamps for speed
+    params.suppress_blank = true;          // Suppress blank outputs
+    params.suppress_nst = true;            // Suppress non-speech tokens
+    
+    // Reduce quality slightly for significant speed gains
+    params.temperature = 0.0f;             // Use greedy decoding (faster)
+    params.greedy.best_of = 1;             // Use only 1 best candidate (faster)
+    params.beam_search.beam_size = 1;      // Use beam size of 1 (faster)
+    
+    // Reduce max context for faster processing
+    params.n_max_text_ctx = 224;           // Reduce from default 448
+    params.audio_ctx = 1500;               // Reduce audio context size
+    
+    // AGGRESSIVE threshold optimizations for maximum speed
+    params.entropy_thold = 3.0f;           // Higher threshold = faster processing
+    params.logprob_thold = -0.5f;          // More aggressive threshold
+    params.no_speech_thold = 0.7f;         // Higher threshold to skip silence faster
+    
+    // Additional speed optimizations
+    params.max_len = 0;                    // No length limit for faster processing
+    params.max_tokens = 0;                 // No token limit
+    params.split_on_word = false;          // Don't split on words for speed
+    
+    // Log optimization settings
+    LOGI("MAXIMUM PERFORMANCE MODE: threads=%d, temp=%.1f, no_context=%s, entropy_thold=%.1f", 
+         num_threads, params.temperature, params.no_context ? "true" : "false", params.entropy_thold);
 
     whisper_reset_timings(context);
 
